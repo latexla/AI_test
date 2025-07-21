@@ -1,3 +1,5 @@
-from .settings import SETTINGS, get_settings
+# core/__init__.py
+from .rag_service import RAGService
+from .testing_agent import TestingAgent, JavaTestHandler
 
-__all__ = ['SETTINGS', 'get_settings']
+__all__ = ['RAGService', 'TestingAgent', 'JavaTestHandler']

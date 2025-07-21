@@ -1,6 +1,6 @@
 # core/rag_service.py
 import os
-from typing import List, Optional
+from typing import List, Optional, Dict
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.embeddings import HuggingFaceEmbeddings
@@ -64,27 +64,55 @@ class RAGService:
             encode_kwargs={'normalize_embeddings': False}
         )
 
-    def load_and_process_documents(self, pdf_paths: List[str]) -> None:
+    def load_and_process_documents(self, file_paths: List[str]) -> None:
         """
-        Загрузка и обработка PDF-документов
+        Загрузка и обработка документов (PDF/код)
         
-        :param pdf_paths: Список путей к PDF-файлам
+        :param file_paths: Список путей к файлам
         """
         all_docs = []
         
-        for pdf_path in pdf_paths:
+        for file_path in file_paths:
             try:
-                logger.info(f"Обработка файла: {pdf_path}")
-                docs = self._load_pdf(pdf_path)
+                logger.info(f"Обработка файла: {file_path}")
+                
+                if file_path.endswith('.pdf'):
+                    docs = self._load_pdf(file_path)
+                elif file_path.endswith(('.java', '.py')):
+                    docs = self._load_code_file(file_path)
+                else:
+                    docs = self._load_text_file(file_path)
+                    
                 all_docs.extend(docs)
             except Exception as e:
-                logger.error(f"Ошибка при обработке файла {pdf_path}: {str(e)}")
+                logger.error(f"Ошибка при обработке файла {file_path}: {str(e)}")
                 continue
         
         if not all_docs:
             raise ValueError("Не удалось загрузить ни одного документа")
         
         self._create_vector_store(all_docs)
+
+    def _load_code_file(self, file_path: str) -> List[Document]:
+        """Загрузка файла с исходным кодом"""
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+            
+        # Сохраняем метаданные о типе файла
+        metadata = {
+            'source': file_path,
+            'file_type': 'code',
+            'language': 'java' if file_path.endswith('.java') else 'python'
+        }
+        
+        return [Document(page_content=content, metadata=metadata)]
+
+    def _load_text_file(self, file_path: str) -> List[Document]:
+        """Загрузка обычного текстового файла"""
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+            
+        return [Document(page_content=content, metadata={'source': file_path})]
 
     def _load_pdf(self, pdf_path: str) -> List[Document]:
         """Загрузка PDF с fallback на OCR при необходимости"""
@@ -184,3 +212,56 @@ class RAGService:
         except Exception as e:
             logger.error(f"Ошибка при обработке запроса '{question}': {str(e)}")
             raise
+
+    def generate_java_test(self, context: str = "", prompt: str = "") -> str:
+        """
+        Генерация Java теста с использованием LLM
+        
+        :param context: Контекст для генерации
+        :param prompt: Инструкции для генерации
+        :return: Сгенерированный код теста
+        """
+        full_prompt = f"""
+        Сгенерируй JUnit тест на Java. 
+        Контекст: {context}
+        Требования: {prompt}
+        Включи:
+        - Импорты необходимых библиотек
+        - Аннотации @Test
+        - Assert проверки
+        - Логирование результатов
+        """
+        result = self.query(full_prompt)
+        return result['answer']
+
+    def generate_java_test_with_javadoc(self, context: str, 
+                                      class_description: str,
+                                      method_descriptions: Dict[str, str]) -> str:
+        """
+        Генерация Java теста с Javadoc документацией
+        
+        :param context: Контекст для генерации
+        :param class_description: Описание класса
+        :param method_descriptions: Описания методов
+        :return: Сгенерированный код теста
+        """
+        methods_desc = "\n".join([f"- {name}: {desc}" for name, desc in method_descriptions.items()])
+        
+        full_prompt = f"""
+        Сгенерируй JUnit тест на Java с полной Javadoc документацией.
+        Контекст: {context}
+        
+        Описание класса:
+        {class_description}
+        
+        Описание методов:
+        {methods_desc}
+        
+        Включи:
+        - Полную Javadoc документацию
+        - Все необходимые импорты
+        - Аннотации @Test
+        - Подробные assert проверки
+        """
+        result = self.query(full_prompt)
+        return result['answer']
