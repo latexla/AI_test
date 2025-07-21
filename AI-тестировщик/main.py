@@ -4,10 +4,9 @@
 """
 
 import os
-import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict
 
 # Инициализация логирования
 logging.basicConfig(
@@ -23,6 +22,7 @@ logger = logging.getLogger(__name__)
 # Импорт компонентов проекта
 from core.rag_service import RAGService
 from core.testing_agent import TestingAgent
+from core.openapi_parser import OpenAPIParser
 from utils.file_utils import FileUtils
 from configs import get_settings
 
@@ -55,9 +55,6 @@ def initialize_services(config: Dict) -> tuple[RAGService, TestingAgent]:
 def process_pdf_document(agent: TestingAgent, pdf_path: str) -> Dict:
     """Обработка PDF документа и генерация тестов"""
     logger.info(f"Обработка PDF документа: {pdf_path}")
-    
-    # Загрузка и обработка PDF
-    agent.rag.process_pdf(pdf_path)
     
     # Пример генерации теста
     test_code = agent.rag.generate_java_test_with_javadoc(
@@ -135,6 +132,39 @@ def analyze_java_tests(agent: TestingAgent, java_dir: str) -> Dict:
         'analyzed_files': len(java_files)
     }
 
+def process_openapi_spec(agent: TestingAgent, spec_path: str) -> Dict:
+    """Обработка OpenAPI спецификации и генерация тестов"""
+    logger.info(f"Обработка OpenAPI спецификации: {spec_path}")
+    
+    parser = OpenAPIParser(spec_path)
+    endpoints = parser.get_endpoints()
+    
+    results = []
+    for endpoint in endpoints:
+        test_code = agent.generate_test_with_docs(
+            class_desc=f"Тесты для {endpoint['method']} {endpoint['path']}",
+            method_descs={
+                f"test{endpoint['method']}{endpoint['path'].replace('/', '_')}Success": 
+                    f"Проверка успешного сценария для {endpoint['method']} {endpoint['path']}",
+                f"test{endpoint['method']}{endpoint['path'].replace('/', '_')}Error":
+                    f"Проверка ошибочного сценария для {endpoint['method']} {endpoint['path']}"
+            }
+        )
+        
+        output_path = os.path.join(
+            config['output_dir'],
+            "generated",
+            f"{endpoint['method']}_{endpoint['path'].replace('/', '_')}_Tests.java"
+        )
+        
+        FileUtils.write_file(test_code['code'], output_path)
+        results.append({
+            'endpoint': f"{endpoint['method']} {endpoint['path']}",
+            'file_path': output_path
+        })
+    
+    return {'results': results}
+
 def main():
     try:
         global config
@@ -166,6 +196,643 @@ def main():
             os.path.join(config['input_dir'], "java_tests")
         )
         logger.info(f"Сгенерирован отчет: {analysis_result['report_path']}")
+
+        # Пример обработки OpenAPI спецификации
+        openapi_result = process_openapi_spec(
+            agent,
+            os.path.join(config['input_dir'], "api_spec/openapi.yaml")
+        )
+        logger.info(f"Сгенерировано тестов для API: {len(openapi_result['results'])}")
+        
+    except Exception as e:
+        logger.error(f"Ошибка выполнения: {str(e)}", exc_info=True)
+        exit(1)
+
+if __name__ == "__main__":
+    main()
+    return {'results': results}
+
+def analyze_java_tests(agent: TestingAgent, java_dir: str) -> Dict:
+    """Анализ существующих Java-тестов"""
+    logger.info(f"Анализ Java-тестов в директории: {java_dir}")
+    
+    java_files = list(Path(java_dir).glob('**/*.java'))
+    if not java_files:
+        raise ValueError("Java-файлы не найдены")
+    
+    analysis_results = []
+    for java_file in java_files:
+        metadata = FileUtils.extract_java_metadata(str(java_file))
+        analysis_results.append({
+            'file': str(java_file),
+            'methods': metadata.get('methods', []),
+            'class': metadata.get('class_name')
+        })
+    
+    report_path = os.path.join(config['output_dir'], "analysis_report.json")
+    FileUtils.write_json(analysis_results, report_path)
+    
+    return {
+        'report_path': report_path,
+        'analyzed_files': len(java_files)
+    }
+
+def process_openapi_spec(agent: TestingAgent, spec_path: str) -> Dict:
+    """Обработка OpenAPI спецификации и генерация тестов"""
+    logger.info(f"Обработка OpenAPI спецификации: {spec_path}")
+    
+    parser = OpenAPIParser(spec_path)
+    endpoints = parser.get_endpoints()
+    
+    results = []
+    for endpoint in endpoints:
+        test_code = agent.generate_test_with_docs(
+            class_desc=f"Тесты для {endpoint['method']} {endpoint['path']}",
+            method_descs={
+                f"test{endpoint['method']}{endpoint['path'].replace('/', '_')}Success": 
+                    f"Проверка успешного сценария для {endpoint['method']} {endpoint['path']}",
+                f"test{endpoint['method']}{endpoint['path'].replace('/', '_')}Error":
+                    f"Проверка ошибочного сценария для {endpoint['method']} {endpoint['path']}"
+            }
+        )
+        
+        output_path = os.path.join(
+            config['output_dir'],
+            "generated",
+            f"{endpoint['method']}_{endpoint['path'].replace('/', '_')}_Tests.java"
+        )
+        
+        FileUtils.write_file(test_code['code'], output_path)
+        results.append({
+            'endpoint': f"{endpoint['method']} {endpoint['path']}",
+            'file_path': output_path
+        })
+    
+    return {'results': results}
+
+def main():
+    try:
+        global config
+        config = load_config()
+        
+        # Создаем необходимые директории
+        os.makedirs(os.path.join(config['output_dir'], "generated"), exist_ok=True)
+        
+        # Инициализация сервисов
+        rag, agent = initialize_services(config)
+        
+        # Пример обработки PDF
+        pdf_result = process_pdf_document(
+            agent,
+            os.path.join(config['input_dir'], "documents/math.pdf")
+        )
+        logger.info(f"PDF обработка завершена: {pdf_result}")
+        
+        # Пример обработки JSON тест-кейсов
+        json_result = process_test_cases(
+            agent,
+            os.path.join(config['input_dir'], "test_cases.json")
+        )
+        logger.info(f"Обработано тест-кейсов: {len(json_result['results'])}")
+        
+        # Пример анализа Java-файлов
+        analysis_result = analyze_java_tests(
+            agent,
+            os.path.join(config['input_dir'], "java_tests")
+        )
+        logger.info(f"Сгенерирован отчет: {analysis_result['report_path']}")
+
+        # Пример обработки OpenAPI спецификации
+        openapi_result = process_openapi_spec(
+            agent,
+            os.path.join(config['input_dir'], "api_spec/openapi.yaml")
+        )
+        logger.info(f"Сгенерировано тестов для API: {len(openapi_result['results'])}")
+        
+    except Exception as e:
+        logger.error(f"Ошибка выполнения: {str(e)}", exc_info=True)
+        exit(1)
+
+if __name__ == "__main__":
+    main()
+    return {'results': results}
+
+def analyze_java_tests(agent: TestingAgent, java_dir: str) -> Dict:
+    """Анализ существующих Java-тестов"""
+    logger.info(f"Анализ Java-тестов в директории: {java_dir}")
+    
+    java_files = list(Path(java_dir).glob('**/*.java'))
+    if not java_files:
+        raise ValueError("Java-файлы не найдены")
+    
+    analysis_results = []
+    for java_file in java_files:
+        metadata = FileUtils.extract_java_metadata(str(java_file))
+        analysis_results.append({
+            'file': str(java_file),
+            'methods': metadata.get('methods', []),
+            'class': metadata.get('class_name')
+        })
+    
+    report_path = os.path.join(config['output_dir'], "analysis_report.json")
+    FileUtils.write_json(analysis_results, report_path)
+    
+    return {
+        'report_path': report_path,
+        'analyzed_files': len(java_files)
+    }
+
+def process_openapi_spec(agent: TestingAgent, spec_path: str) -> Dict:
+    """Обработка OpenAPI спецификации и генерация тестов"""
+    logger.info(f"Обработка OpenAPI спецификации: {spec_path}")
+    
+    parser = OpenAPIParser(spec_path)
+    endpoints = parser.get_endpoints()
+    
+    results = []
+    for endpoint in endpoints:
+        test_code = agent.generate_test_with_docs(
+            class_desc=f"Тесты для {endpoint['method']} {endpoint['path']}",
+            method_descs={
+                f"test{endpoint['method']}{endpoint['path'].replace('/', '_')}Success": 
+                    f"Проверка успешного сценария для {endpoint['method']} {endpoint['path']}",
+                f"test{endpoint['method']}{endpoint['path'].replace('/', '_')}Error":
+                    f"Проверка ошибочного сценария для {endpoint['method']} {endpoint['path']}"
+            }
+        )
+        
+        output_path = os.path.join(
+            config['output_dir'],
+            "generated",
+            f"{endpoint['method']}_{endpoint['path'].replace('/', '_')}_Tests.java"
+        )
+        
+        FileUtils.write_file(test_code['code'], output_path)
+        results.append({
+            'endpoint': f"{endpoint['method']} {endpoint['path']}",
+            'file_path': output_path
+        })
+    
+    return {'results': results}
+
+def main():
+    try:
+        global config
+        config = load_config()
+        
+        # Создаем необходимые директории
+        os.makedirs(os.path.join(config['output_dir'], "generated"), exist_ok=True)
+        
+        # Инициализация сервисов
+        rag, agent = initialize_services(config)
+        
+        # Пример обработки PDF
+        pdf_result = process_pdf_document(
+            agent,
+            os.path.join(config['input_dir'], "documents/math.pdf")
+        )
+        logger.info(f"PDF обработка завершена: {pdf_result}")
+        
+        # Пример обработки JSON тест-кейсов
+        json_result = process_test_cases(
+            agent,
+            os.path.join(config['input_dir'], "test_cases.json")
+        )
+        logger.info(f"Обработано тест-кейсов: {len(json_result['results'])}")
+        
+        # Пример анализа Java-файлов
+        analysis_result = analyze_java_tests(
+            agent,
+            os.path.join(config['input_dir'], "java_tests")
+        )
+        logger.info(f"Сгенерирован отчет: {analysis_result['report_path']}")
+
+        # Пример обработки OpenAPI спецификации
+        openapi_result = process_openapi_spec(
+            agent,
+            os.path.join(config['input_dir'], "api_spec/openapi.yaml")
+        )
+        logger.info(f"Сгенерировано тестов для API: {len(openapi_result['results'])}")
+        
+    except Exception as e:
+        logger.error(f"Ошибка выполнения: {str(e)}", exc_info=True)
+        exit(1)
+
+if __name__ == "__main__":
+    main()
+    return {'results': results}
+
+def analyze_java_tests(agent: TestingAgent, java_dir: str) -> Dict:
+    """Анализ существующих Java-тестов"""
+    logger.info(f"Анализ Java-тестов в директории: {java_dir}")
+    
+    java_files = list(Path(java_dir).glob('**/*.java'))
+    if not java_files:
+        raise ValueError("Java-файлы не найдены")
+    
+    analysis_results = []
+    for java_file in java_files:
+        metadata = FileUtils.extract_java_metadata(str(java_file))
+        analysis_results.append({
+            'file': str(java_file),
+            'methods': metadata.get('methods', []),
+            'class': metadata.get('class_name')
+        })
+    
+    report_path = os.path.join(config['output_dir'], "analysis_report.json")
+    FileUtils.write_json(analysis_results, report_path)
+    
+    return {
+        'report_path': report_path,
+        'analyzed_files': len(java_files)
+    }
+
+def process_openapi_spec(agent: TestingAgent, spec_path: str) -> Dict:
+    """Обработка OpenAPI спецификации и генерация тестов"""
+    logger.info(f"Обработка OpenAPI спецификации: {spec_path}")
+    
+    parser = OpenAPIParser(spec_path)
+    endpoints = parser.get_endpoints()
+    
+    results = []
+    for endpoint in endpoints:
+        test_code = agent.generate_test_with_docs(
+            class_desc=f"Тесты для {endpoint['method']} {endpoint['path']}",
+            method_descs={
+                f"test{endpoint['method']}{endpoint['path'].replace('/', '_')}Success": 
+                    f"Проверка успешного сценария для {endpoint['method']} {endpoint['path']}",
+                f"test{endpoint['method']}{endpoint['path'].replace('/', '_')}Error":
+                    f"Проверка ошибочного сценария для {endpoint['method']} {endpoint['path']}"
+            }
+        )
+        
+        output_path = os.path.join(
+            config['output_dir'],
+            "generated",
+            f"{endpoint['method']}_{endpoint['path'].replace('/', '_')}_Tests.java"
+        )
+        
+        FileUtils.write_file(test_code['code'], output_path)
+        results.append({
+            'endpoint': f"{endpoint['method']} {endpoint['path']}",
+            'file_path': output_path
+        })
+    
+    return {'results': results}
+
+def main():
+    try:
+        global config
+        config = load_config()
+        
+        # Создаем необходимые директории
+        os.makedirs(os.path.join(config['output_dir'], "generated"), exist_ok=True)
+        
+        # Инициализация сервисов
+        rag, agent = initialize_services(config)
+        
+        # Пример обработки PDF
+        pdf_result = process_pdf_document(
+            agent,
+            os.path.join(config['input_dir'], "documents/math.pdf")
+        )
+        logger.info(f"PDF обработка завершена: {pdf_result}")
+        
+        # Пример обработки JSON тест-кейсов
+        json_result = process_test_cases(
+            agent,
+            os.path.join(config['input_dir'], "test_cases.json")
+        )
+        logger.info(f"Обработано тест-кейсов: {len(json_result['results'])}")
+        
+        # Пример анализа Java-файлов
+        analysis_result = analyze_java_tests(
+            agent,
+            os.path.join(config['input_dir'], "java_tests")
+        )
+        logger.info(f"Сгенерирован отчет: {analysis_result['report_path']}")
+
+        # Пример обработки OpenAPI спецификации
+        openapi_result = process_openapi_spec(
+            agent,
+            os.path.join(config['input_dir'], "api_spec/openapi.yaml")
+        )
+        logger.info(f"Сгенерировано тестов для API: {len(openapi_result['results'])}")
+        
+    except Exception as e:
+        logger.error(f"Ошибка выполнения: {str(e)}", exc_info=True)
+        exit(1)
+
+if __name__ == "__main__":
+    main()
+    return {'results': results}
+
+def analyze_java_tests(agent: TestingAgent, java_dir: str) -> Dict:
+    """Анализ существующих Java-тестов"""
+    logger.info(f"Анализ Java-тестов в директории: {java_dir}")
+    
+    java_files = list(Path(java_dir).glob('**/*.java'))
+    if not java_files:
+        raise ValueError("Java-файлы не найдены")
+    
+    analysis_results = []
+    for java_file in java_files:
+        metadata = FileUtils.extract_java_metadata(str(java_file))
+        analysis_results.append({
+            'file': str(java_file),
+            'methods': metadata.get('methods', []),
+            'class': metadata.get('class_name')
+        })
+    
+    report_path = os.path.join(config['output_dir'], "analysis_report.json")
+    FileUtils.write_json(analysis_results, report_path)
+    
+    return {
+        'report_path': report_path,
+        'analyzed_files': len(java_files)
+    }
+
+def process_openapi_spec(agent: TestingAgent, spec_path: str) -> Dict:
+    """Обработка OpenAPI спецификации и генерация тестов"""
+    logger.info(f"Обработка OpenAPI спецификации: {spec_path}")
+    
+    parser = OpenAPIParser(spec_path)
+    endpoints = parser.get_endpoints()
+    
+    results = []
+    for endpoint in endpoints:
+        test_code = agent.generate_test_with_docs(
+            class_desc=f"Тесты для {endpoint['method']} {endpoint['path']}",
+            method_descs={
+                f"test{endpoint['method']}{endpoint['path'].replace('/', '_')}Success": 
+                    f"Проверка успешного сценария для {endpoint['method']} {endpoint['path']}",
+                f"test{endpoint['method']}{endpoint['path'].replace('/', '_')}Error":
+                    f"Проверка ошибочного сценария для {endpoint['method']} {endpoint['path']}"
+            }
+        )
+        
+        output_path = os.path.join(
+            config['output_dir'],
+            "generated",
+            f"{endpoint['method']}_{endpoint['path'].replace('/', '_')}_Tests.java"
+        )
+        
+        FileUtils.write_file(test_code['code'], output_path)
+        results.append({
+            'endpoint': f"{endpoint['method']} {endpoint['path']}",
+            'file_path': output_path
+        })
+    
+    return {'results': results}
+
+def main():
+    try:
+        global config
+        config = load_config()
+        
+        # Создаем необходимые директории
+        os.makedirs(os.path.join(config['output_dir'], "generated"), exist_ok=True)
+        
+        # Инициализация сервисов
+        rag, agent = initialize_services(config)
+        
+        # Пример обработки PDF
+        pdf_result = process_pdf_document(
+            agent,
+            os.path.join(config['input_dir'], "documents/math.pdf")
+        )
+        logger.info(f"PDF обработка завершена: {pdf_result}")
+        
+        # Пример обработки JSON тест-кейсов
+        json_result = process_test_cases(
+            agent,
+            os.path.join(config['input_dir'], "test_cases.json")
+        )
+        logger.info(f"Обработано тест-кейсов: {len(json_result['results'])}")
+        
+        # Пример анализа Java-файлов
+        analysis_result = analyze_java_tests(
+            agent,
+            os.path.join(config['input_dir'], "java_tests")
+        )
+        logger.info(f"Сгенерирован отчет: {analysis_result['report_path']}")
+
+        # Пример обработки OpenAPI спецификации
+        openapi_result = process_openapi_spec(
+            agent,
+            os.path.join(config['input_dir'], "api_spec/openapi.yaml")
+        )
+        logger.info(f"Сгенерировано тестов для API: {len(openapi_result['results'])}")
+        
+    except Exception as e:
+        logger.error(f"Ошибка выполнения: {str(e)}", exc_info=True)
+        exit(1)
+
+if __name__ == "__main__":
+    main()
+    return {'results': results}
+
+def analyze_java_tests(agent: TestingAgent, java_dir: str) -> Dict:
+    """Анализ существующих Java-тестов"""
+    logger.info(f"Анализ Java-тестов в директории: {java_dir}")
+    
+    java_files = list(Path(java_dir).glob('**/*.java'))
+    if not java_files:
+        raise ValueError("Java-файлы не найдены")
+    
+    analysis_results = []
+    for java_file in java_files:
+        metadata = FileUtils.extract_java_metadata(str(java_file))
+        analysis_results.append({
+            'file': str(java_file),
+            'methods': metadata.get('methods', []),
+            'class': metadata.get('class_name')
+        })
+    
+    report_path = os.path.join(config['output_dir'], "analysis_report.json")
+    FileUtils.write_json(analysis_results, report_path)
+    
+    return {
+        'report_path': report_path,
+        'analyzed_files': len(java_files)
+    }
+
+def process_openapi_spec(agent: TestingAgent, spec_path: str) -> Dict:
+    """Обработка OpenAPI спецификации и генерация тестов"""
+    logger.info(f"Обработка OpenAPI спецификации: {spec_path}")
+    
+    parser = OpenAPIParser(spec_path)
+    endpoints = parser.get_endpoints()
+    
+    results = []
+    for endpoint in endpoints:
+        test_code = agent.generate_test_with_docs(
+            class_desc=f"Тесты для {endpoint['method']} {endpoint['path']}",
+            method_descs={
+                f"test{endpoint['method']}{endpoint['path'].replace('/', '_')}Success": 
+                    f"Проверка успешного сценария для {endpoint['method']} {endpoint['path']}",
+                f"test{endpoint['method']}{endpoint['path'].replace('/', '_')}Error":
+                    f"Проверка ошибочного сценария для {endpoint['method']} {endpoint['path']}"
+            }
+        )
+        
+        output_path = os.path.join(
+            config['output_dir'],
+            "generated",
+            f"{endpoint['method']}_{endpoint['path'].replace('/', '_')}_Tests.java"
+        )
+        
+        FileUtils.write_file(test_code['code'], output_path)
+        results.append({
+            'endpoint': f"{endpoint['method']} {endpoint['path']}",
+            'file_path': output_path
+        })
+    
+    return {'results': results}
+
+def main():
+    try:
+        global config
+        config = load_config()
+        
+        # Создаем необходимые директории
+        os.makedirs(os.path.join(config['output_dir'], "generated"), exist_ok=True)
+        
+        # Инициализация сервисов
+        rag, agent = initialize_services(config)
+        
+        # Пример обработки PDF
+        pdf_result = process_pdf_document(
+            agent,
+            os.path.join(config['input_dir'], "documents/math.pdf")
+        )
+        logger.info(f"PDF обработка завершена: {pdf_result}")
+        
+        # Пример обработки JSON тест-кейсов
+        json_result = process_test_cases(
+            agent,
+            os.path.join(config['input_dir'], "test_cases.json")
+        )
+        logger.info(f"Обработано тест-кейсов: {len(json_result['results'])}")
+        
+        # Пример анализа Java-файлов
+        analysis_result = analyze_java_tests(
+            agent,
+            os.path.join(config['input_dir'], "java_tests")
+        )
+        logger.info(f"Сгенерирован отчет: {analysis_result['report_path']}")
+
+        # Пример обработки OpenAPI спецификации
+        openapi_result = process_openapi_spec(
+            agent,
+            os.path.join(config['input_dir'], "api_spec/openapi.yaml")
+        )
+        logger.info(f"Сгенерировано тестов для API: {len(openapi_result['results'])}")
+        
+    except Exception as e:
+        logger.error(f"Ошибка выполнения: {str(e)}", exc_info=True)
+        exit(1)
+
+if __name__ == "__main__":
+    main()
+    return {'results': results}
+
+def analyze_java_tests(agent: TestingAgent, java_dir: str) -> Dict:
+    """Анализ существующих Java-тестов"""
+    logger.info(f"Анализ Java-тестов в директории: {java_dir}")
+    
+    java_files = list(Path(java_dir).glob('**/*.java'))
+    if not java_files:
+        raise ValueError("Java-файлы не найдены")
+    
+    analysis_results = []
+    for java_file in java_files:
+        metadata = FileUtils.extract_java_metadata(str(java_file))
+        analysis_results.append({
+            'file': str(java_file),
+            'methods': metadata.get('methods', []),
+            'class': metadata.get('class_name')
+        })
+    
+    report_path = os.path.join(config['output_dir'], "analysis_report.json")
+    FileUtils.write_json(analysis_results, report_path)
+    
+    return {
+        'report_path': report_path,
+        'analyzed_files': len(java_files)
+    }
+
+def process_openapi_spec(agent: TestingAgent, spec_path: str) -> Dict:
+    """Обработка OpenAPI спецификации и генерация тестов"""
+    logger.info(f"Обработка OpenAPI спецификации: {spec_path}")
+    
+    parser = OpenAPIParser(spec_path)
+    endpoints = parser.get_endpoints()
+    
+    results = []
+    for endpoint in endpoints:
+        test_code = agent.generate_test_with_docs(
+            class_desc=f"Тесты для {endpoint['method']} {endpoint['path']}",
+            method_descs={
+                f"test{endpoint['method']}{endpoint['path'].replace('/', '_')}Success": 
+                    f"Проверка успешного сценария для {endpoint['method']} {endpoint['path']}",
+                f"test{endpoint['method']}{endpoint['path'].replace('/', '_')}Error":
+                    f"Проверка ошибочного сценария для {endpoint['method']} {endpoint['path']}"
+            }
+        )
+        
+        output_path = os.path.join(
+            config['output_dir'],
+            "generated",
+            f"{endpoint['method']}_{endpoint['path'].replace('/', '_')}_Tests.java"
+        )
+        
+        FileUtils.write_file(test_code['code'], output_path)
+        results.append({
+            'endpoint': f"{endpoint['method']} {endpoint['path']}",
+            'file_path': output_path
+        })
+    
+    return {'results': results}
+
+def main():
+    try:
+        global config
+        config = load_config()
+        
+        # Создаем необходимые директории
+        os.makedirs(os.path.join(config['output_dir'], "generated"), exist_ok=True)
+        
+        # Инициализация сервисов
+        rag, agent = initialize_services(config)
+        
+        # Пример обработки PDF
+        pdf_result = process_pdf_document(
+            agent,
+            os.path.join(config['input_dir'], "documents/math.pdf")
+        )
+        logger.info(f"PDF обработка завершена: {pdf_result}")
+        
+        # Пример обработки JSON тест-кейсов
+        json_result = process_test_cases(
+            agent,
+            os.path.join(config['input_dir'], "test_cases.json")
+        )
+        logger.info(f"Обработано тест-кейсов: {len(json_result['results'])}")
+        
+        # Пример анализа Java-файлов
+        analysis_result = analyze_java_tests(
+            agent,
+            os.path.join(config['input_dir'], "java_tests")
+        )
+        logger.info(f"Сгенерирован отчет: {analysis_result['report_path']}")
+
+        # Пример обработки OpenAPI спецификации
+        openapi_result = process_openapi_spec(
+            agent,
+            os.path.join(config['input_dir'], "api_spec/openapi.yaml")
+        )
+        logger.info(f"Сгенерировано тестов для API: {len(openapi_result['results'])}")
         
     except Exception as e:
         logger.error(f"Ошибка выполнения: {str(e)}", exc_info=True)
